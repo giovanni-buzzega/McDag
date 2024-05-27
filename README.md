@@ -1,4 +1,4 @@
-# mcs_power_dag
+# McDag: Indexing Maximal Common Subsequences
 
 Compiling: 
 ```shell
