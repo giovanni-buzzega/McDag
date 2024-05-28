@@ -638,9 +638,8 @@ int collision_detector(vector<uint64_t> & hashes , vector<vector<node_id_t>> & p
 
 
 // O(|sigma|^2) in general (for 2 strings it can be |sigma|log|sigma|) 
-vector<Match> next_matches(const Match & match, const vector<string>& strings, unordered_map<char,vector<vector<int>>>& occurrence, const unordered_set<char>& allowed_chars) {
+vector<Match> next_matches(const Match & match, const vector<string>& strings, unordered_map<char,vector<vector<int>>>& occurrence, const unordered_set<char>& allowed_chars, bool rightmost) {
 	const int K = strings.size();
-	bool rightmost = (occurrence.cbegin()->second[0][0] == -1);
 	// Create one match per letter
 	vector<Match> candidate_matches;
 	candidate_matches.reserve(allowed_chars.size());
@@ -693,11 +692,10 @@ vector<Match> next_matches(const Match & match, const vector<string>& strings, u
 	}
 	return candidate_matches;
 }
-void build_csa(ST_graph<Match> *csa_ptr,const vector<string> & strings, unordered_map<char,vector<vector<int>>> & occurrence, const vector<char> & sigma) {
+void build_csa(ST_graph<Match> *csa_ptr,const vector<string> & strings, unordered_map<char,vector<vector<int>>> & occurrence, const vector<char> & sigma, bool codeterministic) {
 	const unordered_set<char> sigma_set(sigma.begin(),sigma.end());
 	int K = strings.size();
 	ST_graph<Match> & csa = *csa_ptr;
-	bool codeterministic = (occurrence.cbegin()->second[0][0] == -1);
 	// Create D1 and add its sink
 	vector<int> m(K);
 	const char c = strings[0].back();
@@ -744,14 +742,10 @@ void build_csa(ST_graph<Match> *csa_ptr,const vector<string> & strings, unordere
 		}
 	}
 }
-void build_d1(ST_graph<Match> *d1_ptr,const vector<string> & strings, unordered_map<char,vector<vector<int>>> & occurrence, const vector<char> & sigma) {
+void build_d1(ST_graph<Match> *d1_ptr,const vector<string> & strings, unordered_map<char,vector<vector<int>>> & occurrence, const vector<char> & sigma, bool codeterministic) {
 	const unordered_set<char> sigma_set(sigma.begin(),sigma.end());
 	int K = strings.size();
 	ST_graph<Match> & d1 = *d1_ptr;
-	// bool codeterministic = (occurrence[0][0] == -1);
-	bool codeterministic = (occurrence.cbegin()->second[0][0] == -1);
-	// if (codeterministic) cout << "building d1 codeterministically"<<endl;
-	// else cout << "building d1 deterministically"<<endl;
 	// Create D1 and add its sink
 	vector<int> m(K);
 	const char c = strings[0].back();
@@ -769,7 +763,7 @@ void build_d1(ST_graph<Match> *d1_ptr,const vector<string> & strings, unordered_
 	for (; !q.empty(); q.pop()) {
 		node_id_t curr_node = q.front();
 		if (DEBUG) cout<<curr_node<<d1.get_node(curr_node).to_string()<<endl;
-		vector<Match> next = next_matches(d1.get_node(curr_node), strings, occurrence, sigma_set); // todo: prova con e senza costruzione riferimento
+		vector<Match> next = next_matches(d1.get_node(curr_node), strings, occurrence, sigma_set, codeterministic); 
 		if (next.size() == 0) {
 			if (codeterministic) d1.add_edge(d1.source,curr_node);
 			else  d1.add_edge(curr_node,d1.sink);
@@ -819,7 +813,7 @@ void codeterminize_d1(ST_graph<Match> *d1_codet_ptr, ST_graph<Match> * d1_ptr,co
 				parents[strings[0][parent[0]]].push_back(par_pos); 
 			}
 		}
-		vector<Match> next = next_matches(d1_codet.get_node(curr_node), strings, occurrence, sigma_set);
+		vector<Match> next = next_matches(d1_codet.get_node(curr_node), strings, occurrence, sigma_set, true);
 		// smart filter: filter strictly dominated parents by some rightmost match
 		for (auto par_iter = parents.begin(); par_iter != parents.end(); ++par_iter) {
 			for (size_t i = 0; i < par_iter->second.size(); i++) {
@@ -842,7 +836,7 @@ void codeterminize_d1(ST_graph<Match> *d1_codet_ptr, ST_graph<Match> * d1_ptr,co
 					allowed_chars.insert(strings[0][parent_1[0]]);
 			}
 		}
-		next = next_matches(d1_codet.get_node(curr_node), strings, occurrence, allowed_chars);
+		next = next_matches(d1_codet.get_node(curr_node), strings, occurrence, allowed_chars, true);
 
 		if (next.size() == 0) {
 			d1_codet.add_edge(d1_codet.source,curr_node);
@@ -1114,7 +1108,7 @@ int main(int argc, char* argv[]) {
 		fill_preprocessing_occurrence(next_occurrence, strings, sigma, false);
 
 		d1_ptr = new ST_graph<Match>(a_flag,true, true); 
-		build_d1(d1_ptr,strings,next_occurrence,sigma);
+		build_d1(d1_ptr,strings,next_occurrence,sigma, false);
 		gettimeofday(&t_end, 0);
 		cout << "time for d1r: " << time_elapsed(t_begin, t_end) << " seconds."<< endl;
 
@@ -1142,7 +1136,7 @@ int main(int argc, char* argv[]) {
 	} else {
 		ST_graph<Match>* csa_ptr;
 		csa_ptr = new ST_graph<Match>(true,a_flag, false); 
-		build_csa(csa_ptr,strings,prev_occurrence,sigma);
+		build_csa(csa_ptr,strings,prev_occurrence,sigma, true);
 		gettimeofday(&t_end, 0);
 		cout << "time for csa: " << time_elapsed(t_begin, t_end) << " seconds."<< endl;
 		cout << "number of deterministic csa nodes: "<< csa_ptr->get_num_nodes() << ", number of deterministic csa edges: "<< csa_ptr->get_num_edges()<<endl;
