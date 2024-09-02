@@ -2,7 +2,7 @@
 
 Compiling: 
 ```shell
-g++ -o mcdag mcdag.cpp
+g++ -std=c++11 -o mcdag mcdag.cpp
 ```
 
 usage:
