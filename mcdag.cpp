@@ -10,6 +10,7 @@
 #include <math.h>
 #include <random>
 #include <map>
+#include <type_traits>
 typedef  int node_id_t ; // using -1 as a value, do not unsign 
 using namespace std;
 
@@ -172,8 +173,8 @@ template <> struct hash<Final_match> {
 
 template <typename Match> class ST_graph {
 private:
-	//in d1 I need to index nodes by their coordinates
-	//in d2 I need to index nodes by their modeled nodes
+	//in the Approximate indices I need to index nodes by their coordinates
+	//in McDag I need to index nodes by their modeled nodes
 	long double num_paths; 
 	vector < long double> sum_out_deg; // this is for recursively counting paths
 	vector<long double> hist_lengths;
@@ -201,6 +202,32 @@ public:
 		}; // TODO reserve UB spots
 	node_id_t source;
 	node_id_t sink;
+
+	long int bfs_count(){
+	        if constexpr (std::is_base_of<Final_match, Match>::value) {
+		queue<node_id_t> q; 
+
+		q.push(source);
+		long int count = 0;
+		vector<bool> visited(node_list.size(),false);
+		visited[source] = true;
+
+		for (; !q.empty(); q.pop()) {
+			node_id_t curr_node = q.front();
+			// visited[node_list[curr_node].pos] = true;
+			count += node_list[curr_node].modeled.size();
+			for (node_id_t child: adj_list.at(curr_node)) {
+				if (!visited[child]) {
+					q.push(child);
+					visited[child] = true;
+				}
+			}
+		}
+		return count;
+	    } else { return (long) 0;
+					}
+	}
+
 
 	void dfs(const node_id_t node, const string & prefix,const char final_letter, const vector<string> & strings){
 		char mychar = strings[0][get_node(node)[0]];
@@ -613,6 +640,7 @@ int collision_detector(vector<uint64_t> & hashes , vector<vector<node_id_t>> & p
 			gettimeofday(&t_end, 0);
 			cout << "time for minimized_dag: " << time_elapsed(t_begin, t_end) << " seconds."<< endl;
 			cout << "number of "<<name<<"_minimal nodes: "<< get_num_nodes() << ", number of "<<name<<"_minimal edges: "<< get_num_edges()<<endl;
+			cout << "sum of sizes of supernodes: " << bfs_count() << endl;
 		}
 		if (m_flag && do_intensive_computations) {
 			cout<< "language of "<<name<<":\n";
@@ -1110,41 +1138,42 @@ int main(int argc, char* argv[]) {
 		d1_ptr = new ST_graph<Match>(a_flag,true, true); 
 		build_d1(d1_ptr,strings,next_occurrence,sigma, false);
 		gettimeofday(&t_end, 0);
-		cout << "time for deterministic csa_filter: " << time_elapsed(t_begin, t_end) << " seconds."<< endl;
+		cout << "time for (deterministic) CSA-Mixed: " << time_elapsed(t_begin, t_end) << " seconds."<< endl;
 
-		cout << "number of deterministic csa_filter nodes: "<< d1_ptr->get_num_nodes() << ", number of deterministic csa_filter edges: "<< d1_ptr->get_num_edges()<<endl;
+		cout << "number of CSA-Mixed nodes: "<< d1_ptr->get_num_nodes() << ", number of CSA-Mixed edges: "<< d1_ptr->get_num_edges()<<endl;
 		if (a_flag) {
-			if (d1_ptr->print_stats(z_flag, m_flag, l_flag, r_flag, false, "deterministic csa_filter", strings, sigma, true) == -1)
+			if (d1_ptr->print_stats(z_flag, m_flag, l_flag, r_flag, false, "CSA-Mixed", strings, sigma, true) == -1)
 				return -1;
 		}
 
 		d1_codet = new ST_graph<Match>(true,a_flag, false);
 		codeterminize_d1(d1_codet, d1_ptr,strings,prev_occurrence, sigma);
 		gettimeofday(&t_end, 0);
-		cout << "time for csa_filter_codet: " << time_elapsed(t_begin, t_end) << " seconds."<< endl;
+		cout << "time for (codeterministic) CSA-FILTERED: " << time_elapsed(t_begin, t_end) << " seconds."<< endl;
 		delete d1_ptr;
-		cout << "number of csa_filter_codet nodes: "<< d1_codet->get_num_nodes() << ", number of csa_filter_codet edges: "<< d1_codet->get_num_edges()<<endl;
+		cout << "number of CSA-FILTERED nodes: "<< d1_codet->get_num_nodes() << ", number of CSA-FILTERED edges: "<< d1_codet->get_num_edges()<<endl;
 		if (a_flag) {
-			if (d1_codet->print_stats(z_flag, m_flag, l_flag, r_flag, false, "csa_filter_codet", strings, sigma, true) == -1)
+			if (d1_codet->print_stats(z_flag, m_flag, l_flag, r_flag, false, "CSA-FILTERED", strings, sigma, true) == -1)
 				return -1;
 		}
 
 		build_d2(d2, strings, d1_codet);
 		gettimeofday(&t_end, 0);
-		cout << "time for mcdag: " << time_elapsed(t_begin, t_end) << " seconds."<< endl;
+		cout << "time for McDag: " << time_elapsed(t_begin, t_end) << " seconds."<< endl;
 		delete d1_codet;
-		cout << "number of mcdag nodes: "<< d2->get_num_nodes()<< ", number of mcdag edges: "<< d2->get_num_edges()<<endl;
-		if (d2->print_stats(z_flag, m_flag, l_flag, r_flag, false, "mcdag", strings, sigma, true) == -1)
+		cout << "number of McDag nodes: "<< d2->get_num_nodes()<< ", number of McDag edges: "<< d2->get_num_edges()<<endl;
+		cout << "sum of sizes of supernodes: " << d2->bfs_count() << endl;
+		if (d2->print_stats(z_flag, m_flag, l_flag, r_flag, false, "McDag", strings, sigma, true) == -1)
 			return -1;
 	} else {
 		ST_graph<Match>* csa_ptr;
 		csa_ptr = new ST_graph<Match>(true,a_flag, false); 
 		build_csa(csa_ptr,strings,prev_occurrence,sigma, true);
 		gettimeofday(&t_end, 0);
-		cout << "time for csa: " << time_elapsed(t_begin, t_end) << " seconds."<< endl;
-		cout << "number of deterministic csa nodes: "<< csa_ptr->get_num_nodes() << ", number of deterministic csa edges: "<< csa_ptr->get_num_edges()<<endl;
+		cout << "time for (codeterministic) CSA-ALL: " << time_elapsed(t_begin, t_end) << " seconds."<< endl;
+		cout << "number of CSA-ALL nodes: "<< csa_ptr->get_num_nodes() << ", number of CSA-ALL edges: "<< csa_ptr->get_num_edges()<<endl;
 		if (a_flag) {
-			if (csa_ptr->print_stats(z_flag, m_flag, l_flag, r_flag, false, "deterministic csa", strings, sigma, false) == -1)
+			if (csa_ptr->print_stats(z_flag, m_flag, l_flag, r_flag, false, "CSA-ALL", strings, sigma, false) == -1)
 				return -1;
 		}
 		// d1_ptr = new ST_graph<Match>(true,a_flag, false); 
@@ -1156,11 +1185,12 @@ int main(int argc, char* argv[]) {
 		// }
 		build_d2(d2, strings, csa_ptr);
 		gettimeofday(&t_end, 0);
-		cout << "time for csa_maximal: " << time_elapsed(t_begin, t_end) << " seconds."<< endl;
+		cout << "time for CSA-MAXIMAL: " << time_elapsed(t_begin, t_end) << " seconds."<< endl;
 		// delete d1_ptr;
 		delete csa_ptr;
-		cout << "number of csa_maximal nodes: "<< d2->get_num_nodes()<< ", number of csa_maximal edges: "<< d2->get_num_edges()<<endl;
-		if (d2->print_stats(z_flag, m_flag, l_flag, r_flag, false, "csa_maximal", strings, sigma, true) == -1)
+		cout << "number of CSA-MAXIMAL nodes: "<< d2->get_num_nodes()<< ", number of CSA-MAXIMAL edges: "<< d2->get_num_edges()<<endl;
+		cout << "sum of sizes of supernodes: " << d2->bfs_count() << endl;
+		if (d2->print_stats(z_flag, m_flag, l_flag, r_flag, false, "CSA-MAXIMAL ", strings, sigma, true) == -1)
 			return -1;
 	}
 	
