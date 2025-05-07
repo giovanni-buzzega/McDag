@@ -171,6 +171,32 @@ template <> struct hash<Final_match> {
 };
 }
 
+long double logsumexp(long double log_a, long double log_b) {
+	if (log_a == -INFINITY) return log_b;
+	if (log_b == -INFINITY) return log_a;
+	if (log_a > log_b)
+		return log_a + log1p(exp(log_b - log_a));
+	else
+		return log_b + log1p(exp(log_a - log_b));
+}
+
+// Log-sum-exp trick for avoiding overflow
+long double logsumexp(const vector<long double>& log_values, const vector<node_id_t>& indexes) {
+	if (indexes.empty()) return -INFINITY;
+	if (indexes.size() == 1) return log_values[indexes[0]];
+	long double max_log = -INFINITY;
+	for (node_id_t i : indexes) {
+		max_log = max(max_log, log_values[i]);
+	}
+	if (max_log == -INFINITY) return -INFINITY;  // All elements are -inf
+
+	long double sum = 0.0;
+	for (node_id_t i : indexes) {
+		sum += exp(log_values[i] - max_log);
+	}
+	return max_log + log(sum);
+}
+
 template <typename Match> class ST_graph {
 private:
 	//in the Approximate indices I need to index nodes by their coordinates
@@ -239,19 +265,20 @@ public:
 	}
 
 	// TODO: this can be computed during construction without using reverse_adj_list (with priority queue)
-	void ratio_path_lengths(const vector<string> & strings, long double & card_lcs, long double & card_lcs_1, int & lcs_length) {
+	void ratio_path_lengths(const vector<string> & strings, long double & card_lcs, long double & card_lcs_1, int & lcs_length, bool t_flag) {
 		size_t n = strings[0].size(); // n is the minimum length of the string (aka maximum length of any cs)
 		for (const string & s : strings)
 			if (s.size() < n)
 				n = s.size();
 		if (!hist_lengths.empty())  {
-			lcs_length = hist_lengths.size();
-			card_lcs = hist_lengths[lcs_length-1];
-			card_lcs_1 = hist_lengths[lcs_length-2];
+			lcs_length = hist_lengths.size()-1;
+			card_lcs = hist_lengths[lcs_length];
+			card_lcs_1 = hist_lengths[lcs_length-1];
 			return;
 		}
-		vector<long double> num_lcs(adj_list.size(),0);
-		vector<long double> num_lcs_1(adj_list.size(),0);
+		long double init_val = t_flag ? -INFINITY : 0.0L; // use log space or not?
+		vector<long double> num_lcs(adj_list.size(),init_val);
+		vector<long double> num_lcs_1(adj_list.size(),init_val);
 		vector<int> len_lcs(adj_list.size(),0);
 		// Add a node when all children have been visited
 		vector<int> children_left; 
@@ -263,14 +290,16 @@ public:
 
 		q.push(sink);
 		len_lcs[sink] = 1;
-		num_lcs[sink] = 1;
+		if (t_flag) num_lcs[sink] = 0;	//log(1)
+		else num_lcs[sink] = 1;
 
 		for (; !q.empty(); q.pop()) {
 			node_id_t curr_node = q.front();
 			// Update based on the value of the children
 			for (node_id_t child: adj_list.at(curr_node)) {
 				if ( len_lcs[curr_node] == len_lcs[child]) {
-					num_lcs_1[curr_node] = num_lcs_1[child]+num_lcs[curr_node];
+					if (t_flag) num_lcs_1[curr_node] = logsumexp(num_lcs_1[child],num_lcs[curr_node]);
+					else num_lcs_1[curr_node] = num_lcs_1[child]+num_lcs[curr_node];
 					num_lcs[curr_node] = num_lcs[child];
 					len_lcs[curr_node] = len_lcs[child]+1;
 				} else if ( len_lcs[curr_node] < len_lcs[child]) {
@@ -278,10 +307,16 @@ public:
 					num_lcs[curr_node] = num_lcs[child];
 					len_lcs[curr_node] = len_lcs[child]+1;
 				} else if ( len_lcs[curr_node] == len_lcs[child]+1) {
-					num_lcs_1[curr_node] += num_lcs_1[child];
-					num_lcs[curr_node] += num_lcs[child];
+					if (t_flag) {
+						num_lcs_1[curr_node]  = logsumexp(num_lcs_1[curr_node], num_lcs_1[child]);
+						num_lcs[curr_node]  = logsumexp(num_lcs[curr_node], num_lcs[child]);
+					}else {
+						num_lcs_1[curr_node] += num_lcs_1[child];
+						num_lcs[curr_node] += num_lcs[child];
+					}
 				} else if ( len_lcs[curr_node] == len_lcs[child]+2) {
-					num_lcs_1[curr_node] += num_lcs[child];
+					if (t_flag) num_lcs_1[curr_node] = logsumexp(num_lcs_1[curr_node], num_lcs[child]);
+					else num_lcs_1[curr_node] += num_lcs[child];
 				}
 			}
 			// Add parent if visiting its last children
@@ -299,7 +334,7 @@ public:
 		return;
 	}
 	// O(largest_antichain * n^2)
-	void histogram_path_lengths() {
+	void histogram_path_lengths(bool t_flag) {
 		if (!hist_lengths.empty()) return ;
 		
 		vector<vector<long double>> hist_of_node;
@@ -315,7 +350,10 @@ public:
 		// Queue of nodes that have 0 children_left
 		queue<node_id_t> q; 
 
-		hist_of_node.insert(hist_of_node.cbegin() + sink,vector<long double>(1,(long double) 1));
+		if (t_flag) 
+			hist_of_node.insert(hist_of_node.cbegin() + sink,vector<long double>(1,(long double) 0)); // log(1)
+		else 
+			hist_of_node.insert(hist_of_node.cbegin() + sink,vector<long double>(1,(long double) 1));
 		//TODO: reserve for each hist of node;
 		q.push(sink);
 
@@ -323,13 +361,41 @@ public:
 			node_id_t curr_node = q.front();
 			parents_left[curr_node] = reverse_adj_list.at(curr_node).size();
 			// Update based on the value of the children
+			if (t_flag) {
+				// Log-sum-exp trick for avoiding overflow, to be used in histogram computation
+				size_t max_i = 0;
+				for (node_id_t child : adj_list.at(curr_node)) {
+					max_i = max(max_i, hist_of_node[child].size());
+				}
+				for (size_t i = 0; i < max_i; i++) {
+					long double max_log = -INFINITY;
+					for (node_id_t child : adj_list.at(curr_node)) {
+						if (hist_of_node[child].size() > i)
+							max_log = max(max_log, hist_of_node[child][i]);
+					}
+					if (max_log == -INFINITY)
+						hist_of_node[curr_node][i+1] = max_log;
+					else {
+						long double sum = 0.0;
+						for (node_id_t child : adj_list.at(curr_node)) {
+							if (hist_of_node[child].size() > i)
+								sum += exp(hist_of_node[child][i] - max_log);
+						}
+						hist_of_node[curr_node][i+1] = max_log + log(sum);
+					}
+				}
+			} else {
+				for (node_id_t child: adj_list.at(curr_node)) {
+					for (size_t i = 0; i < hist_of_node[child].size(); i++) 
+						hist_of_node[curr_node][i+1] += hist_of_node[child][i];
+				}
+			}
 			for (node_id_t child: adj_list.at(curr_node)) {
-				for (size_t i = 0; i < hist_of_node[child].size(); i++) 
-					hist_of_node[curr_node][i+1] += hist_of_node[child][i];
 				parents_left[child]--; 
 				// clear memory
 				if (parents_left[child]==0) {
 					hist_of_node[child].clear();
+					hist_of_node[child].shrink_to_fit();  // try to release heap memory
 				}
 			}
 			// Add parent if visiting its last children
@@ -340,7 +406,8 @@ public:
 					for (const node_id_t child: adj_list.at(parent)) 
 						if (hist_of_node[child].size() > max_child_length)
 							max_child_length = hist_of_node[child].size();
-					hist_of_node[parent] = vector<long double>(max_child_length+1,0);
+					long double init_val = t_flag ? -INFINITY : 0.0L; // use log space or not?
+					hist_of_node[parent] = vector<long double>(max_child_length+1,init_val);
 					q.push(parent);
 				}
 			}
@@ -350,9 +417,14 @@ public:
 		hist_lengths = hist_of_node[source];
 	}
 	// O(largest_antichain * n)
-	long double iterative_count_paths() {
+	long double iterative_count_paths(bool t_flag) {
 		if (num_paths > 0) return num_paths;
 		if (!hist_lengths.empty()) { 
+			if (t_flag) {
+				vector<node_id_t> indexes(hist_lengths.size());
+				iota(indexes.begin(), indexes.end(), 0);
+			       	return logsumexp(hist_lengths, indexes);
+			}
 			long double c = 0;
 			for (size_t i = 0; i < hist_lengths.size(); i++)
 				c+= hist_lengths[i];
@@ -370,14 +442,20 @@ public:
 		// Queue of nodes that have 0 children_left
 		queue<node_id_t> q; 
 
-		sum_out_deg[sink] = 1;
+		if (t_flag) sum_out_deg[sink] = 0; //log(1)
+		else sum_out_deg[sink] = 1;
 		q.push(sink);
 
 		for (; !q.empty(); q.pop()) {
 			node_id_t curr_node = q.front();
 			// Update based on the value of the children
-			for (node_id_t child: adj_list.at(curr_node)) {
-				sum_out_deg[curr_node] += sum_out_deg[child];
+			if (t_flag) {
+				if (adj_list.at(curr_node).size() > 0)
+					sum_out_deg[curr_node] = logsumexp(sum_out_deg, adj_list.at(curr_node));
+			} else {
+				for (node_id_t child: adj_list.at(curr_node)) {
+					sum_out_deg[curr_node] += sum_out_deg[child];
+				}
 			}
 			// Add parent if visiting its last children
 			for (const node_id_t parent: reverse_adj_list.at(curr_node)) {
@@ -630,8 +708,9 @@ int collision_detector(vector<uint64_t> & hashes , vector<vector<node_id_t>> & p
 		// delete link to children
 		det_adj[m2].clear();
 	}
-	int print_stats(bool z_flag, bool m_flag, bool l_flag, bool r_flag, bool virt, const string & name, const vector<string>& strings, const vector<char> & sigma, bool do_intensive_computations) {
-		cout << "number of "<<name<<" paths: "<< iterative_count_paths() <<endl;
+	int print_stats(bool z_flag, bool m_flag, bool l_flag, bool t_flag, bool r_flag, bool virt, const string & name, const vector<string>& strings, const vector<char> & sigma, bool do_intensive_computations) {
+		if (t_flag) cout << "logarithm of ";
+		cout << "number of "<<name<<" paths: "<< iterative_count_paths(t_flag) <<endl;
 		if (z_flag && do_intensive_computations) {
 			if (!minimalize(strings,sigma,virt)) {
 				cout << "minimization of "<<name<<" failed. exit\n";
@@ -647,18 +726,25 @@ int collision_detector(vector<uint64_t> & hashes , vector<vector<node_id_t>> & p
 			dfs(source, "", '$', strings);
 		}
 		if (l_flag && do_intensive_computations) {
-			cout<< "Distribution of length of "<<name<<" paths:\n";
-			histogram_path_lengths();
+			timeval t_dist_begin, t_dist_end;
+			gettimeofday(&t_dist_begin, 0);
+			histogram_path_lengths(t_flag);
+			gettimeofday(&t_dist_end, 0);
+			cout << "time for computing the histogram: " << time_elapsed(t_dist_begin, t_dist_end) << " seconds."<< endl;
+			if (t_flag) cout << "logarithmic ";
+			cout<< "distribution of length of "<<name<<" paths:\n";
+			long double zero_val = t_flag ? -INFINITY : 0.0L;
 			for (size_t i = 0; i < hist_lengths.size(); i++)
-				if (hist_lengths[i] > 0)
+				if (hist_lengths[i] > zero_val)
 					cout<<i<<": "<<hist_lengths[i]<<endl;
 		}
 		if (r_flag) {
 			long double card_lcs = 0;
 			long double card_lcs_1 = 0;
 			int lcs_length = 0;
-			ratio_path_lengths( strings, card_lcs, card_lcs_1, lcs_length) ;
-			cout<< "Ratio according to "<<name<<" #(lcs-1): " << card_lcs_1 << " #lcs: "<<card_lcs << " lcs_length: "<<lcs_length <<endl;
+			ratio_path_lengths( strings, card_lcs, card_lcs_1, lcs_length, t_flag) ;
+			if (t_flag) cout << "logarithm of "; 
+			cout<< "ratio according to "<<name<<" #(lcs-1): " << card_lcs_1 << " #lcs: "<<card_lcs << " lcs_length: "<<lcs_length <<endl;
 		}
 		return 0;
 	}
@@ -1002,6 +1088,7 @@ int main(int argc, char* argv[]) {
 	int K = 2;
 	bool m_flag = false;
 	bool l_flag = false;
+	bool t_flag = false;
 	bool a_flag = false;
 	bool z_flag = false;
 	bool r_flag = false;
@@ -1013,22 +1100,45 @@ int main(int argc, char* argv[]) {
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
 		if (arg == "-k" ) {
-			if (i + 1 < argc)
-				K = stoi(argv[i + 1]);
-			else
+			if (i + 1 < argc) {
+				try {
+					K = stoi(argv[i + 1]);
+				} catch (const invalid_argument& e) {
+					cout << "invalid_argument: " << e.what() << '\n';
+				}
+			} else {
 				cout<< "flag -k must be followed by the requested number of strings\n";
+				return -10;
+			}
 			i++;
 		} else if (arg == "-s" ) {
-			if (i + 1 < argc)
-				alphabet_len = stoi(argv[i + 1]);
-			else
+			if (i + 1 < argc) {
+				try {
+					alphabet_len = stoi(argv[i + 1]);
+				} catch (const invalid_argument& e) {
+					cout << "invalid_argument: " << e.what() << '\n';
+				}
+				if (alphabet_len < 1) {
+					cout<< "please specify a positive alphabet length\n";
+					return -10;
+				}
+			}
+			else {
 				cout<< "flag -s must be followed by the requested size of the alphabet\n";
+				return -10;
+			}
 			i++;
 		} else if (arg == "-n" ) {
 			if (i + 1 < argc)
-				len = stoi(argv[i + 1]);
-			else
+				try {
+					len = stoi(argv[i + 1]);
+				} catch (const invalid_argument& e) {
+					cout << "invalid_argument: " << e.what() << '\n';
+				}
+			else {
 				cout<< "flag -n must be followed by the requested length of the strings\n";
+				return -10;
+			}
 			i++;
 		} else if (arg == "-m") {
 			m_flag = true;
@@ -1044,6 +1154,8 @@ int main(int argc, char* argv[]) {
 			r_flag = true;
 		} else if (arg == "-l") {
 			l_flag = true;
+		} else if (arg == "-t") {
+		       	t_flag = true;	
 		} else if (arg == "-h" || arg == "--help") {
 			cout << "usage:\n\t./mcdag [FLAG...] [STRING...]\n\n"
 				<< "Flags:\n\t-k num_strings\tset the number of"
@@ -1053,6 +1165,7 @@ int main(int argc, char* argv[]) {
 				<< "\t-m\t\t\tprint all mcs (!!)\n"
 				<< "\t-d\t\t\tprint McDag\n"
 				<< "\t-l\t\t\tprint the distribution of the mcs lengths\n"
+				<< "\t-t\t\t\tprint the logarithm of the number of paths\n"
 				<< "\t-r\t\t\tprint the number of lcs-1 and lcs\n"
 				<< "\t-z\t\t\tminimalize McDag\n"
 				<< "\t-a\t\t\tapply all flags to approximate indices\n"
@@ -1072,7 +1185,7 @@ int main(int argc, char* argv[]) {
 		if (c != '$' && c != '#' && isprint(c))
 			sigma.push_back(c);
 	}
-	assert(alphabet_len <= sigma.size());
+	assert((unsigned) alphabet_len <= sigma.size());
 	sigma.erase(sigma.begin()+alphabet_len,sigma.end());
 	if (strings.size() == 0) {
 		// randomly generate strings
@@ -1142,7 +1255,7 @@ int main(int argc, char* argv[]) {
 
 		cout << "number of CSA-Mixed nodes: "<< d1_ptr->get_num_nodes() << ", number of CSA-Mixed edges: "<< d1_ptr->get_num_edges()<<endl;
 		if (a_flag) {
-			if (d1_ptr->print_stats(z_flag, m_flag, l_flag, r_flag, false, "CSA-Mixed", strings, sigma, true) == -1)
+			if (d1_ptr->print_stats(z_flag, m_flag, l_flag, t_flag, r_flag, false, "CSA-Mixed", strings, sigma, true) == -1)
 				return -1;
 		}
 
@@ -1153,7 +1266,7 @@ int main(int argc, char* argv[]) {
 		delete d1_ptr;
 		cout << "number of CSA-FILTERED nodes: "<< d1_codet->get_num_nodes() << ", number of CSA-FILTERED edges: "<< d1_codet->get_num_edges()<<endl;
 		if (a_flag) {
-			if (d1_codet->print_stats(z_flag, m_flag, l_flag, r_flag, false, "CSA-FILTERED", strings, sigma, true) == -1)
+			if (d1_codet->print_stats(z_flag, m_flag, l_flag, t_flag, r_flag, false, "CSA-FILTERED", strings, sigma, true) == -1)
 				return -1;
 		}
 
@@ -1163,7 +1276,7 @@ int main(int argc, char* argv[]) {
 		delete d1_codet;
 		cout << "number of McDag nodes: "<< d2->get_num_nodes()<< ", number of McDag edges: "<< d2->get_num_edges()<<endl;
 		cout << "sum of sizes of supernodes: " << d2->bfs_count() << endl;
-		if (d2->print_stats(z_flag, m_flag, l_flag, r_flag, false, "McDag", strings, sigma, true) == -1)
+		if (d2->print_stats(z_flag, m_flag, l_flag, t_flag, r_flag, false, "McDag", strings, sigma, true) == -1)
 			return -1;
 	} else {
 		ST_graph<Match>* csa_ptr;
@@ -1173,14 +1286,14 @@ int main(int argc, char* argv[]) {
 		cout << "time for (codeterministic) CSA-ALL: " << time_elapsed(t_begin, t_end) << " seconds."<< endl;
 		cout << "number of CSA-ALL nodes: "<< csa_ptr->get_num_nodes() << ", number of CSA-ALL edges: "<< csa_ptr->get_num_edges()<<endl;
 		if (a_flag) {
-			if (csa_ptr->print_stats(z_flag, m_flag, l_flag, r_flag, false, "CSA-ALL", strings, sigma, false) == -1)
+			if (csa_ptr->print_stats(z_flag, m_flag, l_flag, t_flag, r_flag, false, "CSA-ALL", strings, sigma, false) == -1)
 				return -1;
 		}
 		// d1_ptr = new ST_graph<Match>(true,a_flag, false); 
 		// build_d1(d1_ptr,strings,prev_occurrence,sigma);
 		// cout << "number of deterministic d1 nodes: "<< d1_ptr->get_num_nodes() << ", number of deterministic d1 edges: "<< d1_ptr->get_num_edges()<<endl;
 		// if (a_flag) {
-		// 	if (d1_ptr->print_stats(z_flag, m_flag, l_flag, r_flag, false, "codeterministic d1", strings, sigma, true) == -1)
+		// 	if (d1_ptr->print_stats(z_flag, m_flag, l_flag, t_flag, r_flag, false, "codeterministic d1", strings, sigma, true) == -1)
 		// 		return -1;
 		// }
 		build_d2(d2, strings, csa_ptr);
@@ -1190,7 +1303,7 @@ int main(int argc, char* argv[]) {
 		delete csa_ptr;
 		cout << "number of CSA-MAXIMAL nodes: "<< d2->get_num_nodes()<< ", number of CSA-MAXIMAL edges: "<< d2->get_num_edges()<<endl;
 		cout << "sum of sizes of supernodes: " << d2->bfs_count() << endl;
-		if (d2->print_stats(z_flag, m_flag, l_flag, r_flag, false, "CSA-MAXIMAL ", strings, sigma, true) == -1)
+		if (d2->print_stats(z_flag, m_flag, l_flag, t_flag, r_flag, false, "CSA-MAXIMAL ", strings, sigma, true) == -1)
 			return -1;
 	}
 	
